@@ -1,6 +1,6 @@
 {
   "name": "umbra",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "CLI for publish Umbraco CMS contents from local files",
   "main": "index.js",
   "bin": "index.js",
