@@ -114,7 +114,7 @@ function batch_map(batch_id, batch_name) {
 	function flatten(root) {
 		var map = {};
 		root.children.forEach(function (node) {
-			node.key = [root.name, node.name].join('_');
+			node.key = [root.key || root.name, node.name].join('_');
 			if (node.children) {
 				_.extend(map, flatten(node));
 			} else {
