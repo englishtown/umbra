@@ -1,0 +1,26 @@
+{
+  "name": "umbra",
+  "version": "0.0.1",
+  "description": "CLI for publish Umbraco CMS contents from local files",
+  "main": "index.js",
+  "bin": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cheerio": "^0.18.0",
+    "colors": "^1.0.3",
+    "commander": "^2.6.0",
+    "lodash": "^3.2.0",
+    "moment": "^2.9.0",
+    "request": "^2.53.0",
+    "request-debug": "^0.1.1",
+    "shelljs": "^0.3.0",
+    "tough-cookie": "^0.12.1",
+    "walk": "^2.3.9",
+    "when": "^3.7.2",
+    "xml2js": "^0.4.5"
+  }
+}
