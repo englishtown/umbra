@@ -135,12 +135,18 @@ function batch_map(batch_id, batch_name) {
 var cli = require('commander').version(pkg.version);
 cli.description(pkg.description);
 
-cli.command('pub').description('publishing local cms directory to Umbraco in a batch').action(function () {
+cli.command('pub [file]').description('publish a specific or batch of local files in "cms" directory to Umbraco').action(function (afile) {
 	auth().then(function () {
 		batch_map(29641, 'Camp').then(function (map) {
 			// go through the list of local git CMS files for publishing.
 			walk("./cms", {followLinks : false}).on('file',
 			function (dir, file, next) {
+
+				// a specific file
+				if (afile && afile !== path.join(dir, file.name)) {
+					return next();
+				}
+
 				var key = path.basename(file.name, path.extname(file.name));
 				var val = fs.readFileSync(path.join(dir, file.name), 'utf8');
 				var node;
