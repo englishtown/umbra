@@ -70,6 +70,34 @@ function updateContent(node) {
 	});
 }
 
+function getContent(id) {
+	// guess extension by content: "json", "html" or "text"
+	function guess_extension(str) {
+		try {
+			JSON.parse(str);
+			return 'json';
+		} catch (er) {
+			var $ = cheerio(str);
+			if ($('*').length)
+				return 'html';
+		}
+		return 'txt';
+	}
+
+	return request.get(CMS_URL, {
+		qs : {id : id}
+	}).spread(function (response, body) {
+		var $ = cheerio(body);
+		var content = $('[name="ctl00$body$ctl08"]').val() || $('[name="ctl00$body$ctl04"]').val();
+		return {
+			id: id,
+			key: $('[name="ctl00$body$NameTxt"]').val(),
+			type: guess_extension(content),
+			val: content
+		};
+	});
+}
+
 function batch_map(batch_id, batch_name) {
 	function fetchBatch(batch_id) {
 		return request.get(TREE_URL, {
@@ -135,7 +163,7 @@ function batch_map(batch_id, batch_name) {
 var cli = require('commander').version(pkg.version);
 cli.description(pkg.description);
 
-cli.command('pub [file1] [file2]').description('publish specific file(s) or the entire "cms" directory to Umbraco').action(function () {
+cli.command('push [file1] [file2]').description('publish specific file(s) or the entire "cms" directory to Umbraco').action(function () {
 	var files = _.compact(_.dropRight(arguments, 1));
 	files = files.length ? _.indexBy(files) : null;
 	auth().then(function () {
@@ -164,6 +192,35 @@ cli.command('pub [file1] [file2]').description('publish specific file(s) or the 
 					});
 				}
 				next();
+			});
+		});
+	});
+});
+
+cli.command('pull').description('fetch newly created Umbraco contents back to the "cms" directory').action(function () {
+	var existing = {};
+	// go through the list of local git CMS files for publishing.
+	walk("./cms", {followLinks : false}).on('file', function (dir, file, next) {
+		var key = path.basename(file.name, path.extname(file.name));
+		existing[key.toLowerCase()] = 1;
+		next();
+	}).on('end', function () {
+		auth().then(function () {
+			batch_map(29641, 'Camp').then(function (nodes) {
+				nodes = _.chain(nodes).map(function (node, key) {
+					if (!(key.toLowerCase() in existing)) {
+						// create new file
+						return getContent(node.id).then(function (node) {
+							var file = path.join('cms', key);
+							if(node.type) { file += ('.' + node.type) }
+							console.log('creating file %s', file);
+							fs.writeFileSync(file, node.val);
+						})
+					}
+				}).compact().value();
+				return when.map(nodes).then(function () {
+					console.log('all files are up-to-date.');
+				});
 			});
 		});
 	});
