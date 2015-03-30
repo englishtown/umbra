@@ -26,9 +26,8 @@ var LOGIN_URL = 'http://umbraco.englishtown.com/umbraco/login.aspx';
 var CMS_URL = 'http://umbraco.englishtown.com/umbraco/editContent.aspx';
 var TREE_URL = 'http://umbraco.englishtown.com/umbraco/tree.aspx';
 
-function extendForm(form, body) {
+function extendForm(form, $) {
 	var params = {};
-	var $ = cheerio(body);
 	$('[type="hidden"]').each(function (index, elem) {
 		params[$(elem).attr('name')] = $(elem).val() || '';
 	});
@@ -38,7 +37,12 @@ function extendForm(form, body) {
 function formPost(url, params) {
 	return request.get(url,
 	{qs : params.qs}).spread(function (response, get_body) {
-		params.form = extendForm(params.form || {}, get_body);
+		var $ = cheerio(get_body);
+		// when we has to construct the form dynamically
+		if(typeof params.form === 'function') {
+			params.form = params.form($);
+		}
+		params.form = extendForm(params.form || {}, $);
 		return request.post(url, params);
 	});
 }
@@ -61,11 +65,17 @@ function updateContent(node) {
 	return formPost(CMS_URL, {
 		qs : {
 			id : node.id
-		}, form : {
-			'ctl00$body$TabView1_tab01layer_publish.x' : 1,
-			'ctl00$body$TabView1_tab01layer_publish.y' : 2,
-			'ctl00$body$ctl04' : node.val,
-			'ctl00$body$NameTxt' : node.name
+		},
+		form : function prepareForm($) {
+			var retval = {
+				'ctl00$body$TabView1_tab01layer_publish.x' : 1,
+				'ctl00$body$TabView1_tab01layer_publish.y' : 2,
+				'ctl00$body$NameTxt' : node.name
+			};
+			var contentTabIndex = $('.header li > a > span > nobr:contains("Content")').closest('li').index() + 1;
+			var content_name = $('.tabpage:nth-child('+ contentTabIndex+ ') .tabpageContent textarea').eq(0).attr('name');
+			retval[content_name] = node.val;
+			return retval;
 		}
 	});
 }
@@ -142,7 +152,7 @@ function batch_map(batch_id, batch_name) {
 	function flatten(root) {
 		var map = {};
 		root.children.forEach(function (node) {
-			node.key = [root.key || root.name, node.name].join('_');
+			node.key = [root.key || root.name, node.name].join('_').toLowerCase();
 			if (node.children) {
 				_.extend(map, flatten(node));
 			} else {
@@ -163,22 +173,22 @@ function batch_map(batch_id, batch_name) {
 var cli = require('commander').version(pkg.version);
 cli.description(pkg.description);
 
-cli.command('push [file1] [file2]').description('publish specific file(s) or the entire "cms" directory to Umbraco').action(function () {
-	var files = _.compact(_.dropRight(arguments, 1));
-	files = files.length ? _.indexBy(files) : null;
+cli.command('push [files...]').description('publish specific file(s) or the entire "cms" directory to Umbraco').action(function (files) {
+	files = files.length ? _.indexBy(files, function (file) { return file.toLowerCase(); }) : null;
+
 	auth().then(function () {
 		batch_map(29641, 'Camp').then(function (map) {
 			// go through the list of local git CMS files for publishing.
 			walk("./cms", {followLinks : false}).on('file',
 			function (dir, file, next) {
-				var p = path.join(dir, file.name);
+				var p = path.join(dir, file.name).toLowerCase();
 
 				// skip files that are not in the list
 				if (files && !(p in files)) {
 					return next();
 				}
 
-				var key = path.basename(file.name, path.extname(file.name));
+				var key = path.basename(file.name, path.extname(file.name)).toLowerCase();
 				var val = fs.readFileSync(path.join(dir, file.name), 'utf8');
 				var node;
 				if (node = map[key]) {
