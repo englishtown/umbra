@@ -6,13 +6,17 @@ var when = require('when');
 var fs = require('fs');
 var path = require('path');
 var node = require('when/node');
+var pipeline = require('when/pipeline');
 var walk = require('walk').walk;
 var prompt = require('prompt');
+var json = require('jsonfile');
 var pkg = require('./package.json');
 var HOME_PATH = (function () {
 	return process.env[(process.platform == 'win32') ? 'USERPROFILE' : 'HOME'];
 })();
-var nconf = require('nconf').argv().file({file : path.join(HOME_PATH, 'umbra.auth.json')});
+var nconf = require('nconf').argv().file({
+	file : path.join(HOME_PATH, 'umbra.auth.json')
+});
 require('colors').setTheme({
 	prompt : 'grey', ok : 'green', warn : 'yellow', fail : 'red'
 });
@@ -44,7 +48,7 @@ function formPost(url, params) {
 	{qs : params.qs}).spread(function (response, get_body) {
 		var $ = cheerio(get_body);
 		// when we has to construct the form dynamically
-		if(typeof params.form === 'function') {
+		if (typeof params.form === 'function') {
 			params.form = params.form($);
 		}
 		params.form = extendForm(params.form || {}, $);
@@ -80,7 +84,6 @@ function getAuth(usePrompt) {
 		return [nconf.get('auth:username'), nconf.get('auth:password')];
 	});
 }
-
 function auth(usePrompt) {
 	return getAuth(usePrompt).spread(function (username, password) {
 		return formPost(LOGIN_URL, {
@@ -108,21 +111,21 @@ function updateContent(node) {
 	return formPost(CMS_URL, {
 		qs : {
 			id : node.id
-		},
-		form : function prepareForm($) {
+		}, form : function prepareForm($) {
 			var retval = {
 				'ctl00$body$TabView1_tab01layer_publish.x' : 1,
 				'ctl00$body$TabView1_tab01layer_publish.y' : 2,
 				'ctl00$body$NameTxt' : node.name
 			};
-			var contentTabIndex = $('.header li > a > span > nobr:contains("Content")').closest('li').index() + 1;
-			var content_name = $('.tabpage:nth-child('+ contentTabIndex+ ') .tabpageContent textarea').eq(0).attr('name');
+			var contentTabIndex = $('.header li > a > span > nobr:contains("Content")').closest('li').index() +
+			1;
+			var content_name = $('.tabpage:nth-child(' + contentTabIndex +
+			') .tabpageContent textarea').eq(0).attr('name');
 			retval[content_name] = node.val;
 			return retval;
 		}
 	});
 }
-
 function getContent(id) {
 	// guess extension by content: "json", "html" or "text"
 	function guess_extension(str) {
@@ -131,8 +134,9 @@ function getContent(id) {
 			return 'json';
 		} catch (er) {
 			var $ = cheerio(str);
-			if ($('*').length)
+			if ($('*').length) {
 				return 'html';
+			}
 		}
 		return 'txt';
 	}
@@ -141,21 +145,23 @@ function getContent(id) {
 		qs : {id : id}
 	}).spread(function (response, body) {
 		var $ = cheerio(body);
-		var content = $('[name="ctl00$body$ctl08"]').val() || $('[name="ctl00$body$ctl04"]').val();
+		var content = $('[name="ctl00$body$ctl08"]').val() ||
+		$('[name="ctl00$body$ctl04"]').val();
 		return {
-			id: id,
-			key: $('[name="ctl00$body$NameTxt"]').val(),
-			type: guess_extension(content),
-			val: content
+			id : id,
+			key : $('[name="ctl00$body$NameTxt"]').val(),
+			type : guess_extension(content),
+			val : content
 		};
 	});
 }
 
-function batch_map(batch_id, batch_name) {
-	function fetchBatch(batch_id) {
+/* fetch the tree nodes of the specified Umbraco ID */
+function fetch(nodeId, nodeName, isRecursive) {
+	function fetchNode(node_id) {
 		return request.get(TREE_URL, {
 			qs : {
-				id : batch_id, treeType : 'content'
+				id : node_id, treeType : 'content'
 			}
 		}).spread(function (res, body) {
 			return parseXml(body).then(function (retval) {
@@ -170,24 +176,24 @@ function batch_map(batch_id, batch_name) {
 					}
 					return retval;
 				}).filter(function (node) {
-					if (!node.name) {
-						console.log('[warning] '.warn +
-						'CMS id %s has no name specified thus will no be updated', node.id);
-					}
 					// filter out page without name
 					return node.name;
 				});
 			});
 		}).then(function (list) {
+			// Non-recursive fetch shall stop here.
+			if (!isRecursive) {
+				return list;
+			}
 			return when.map(list, function (node) {
 				// expand collapsed tree node
 				if (node.children) {
-					return fetchBatch(node.id).tap(function (list) {
+					return fetchNode(node.id).tap(function (list) {
 						node.children = list;
 					}).yield(node);
 				}
 				return node;
-			}).then();
+			});
 		});
 	}
 
@@ -206,38 +212,156 @@ function batch_map(batch_id, batch_name) {
 		return map;
 	}
 
-	return fetchBatch(batch_id).then(function (list) {
+	return fetchNode(nodeId).then(function (list) {
+		if (!isRecursive) {
+			return list;
+		}
+
 		return flatten({
-			id : batch_id, name : batch_name, children : list
+			id : nodeId, name : nodeName, children : list
+		});
+	});
+}
+/* locate the content tree node of the specified path */
+function locate(cmsPath) {
+
+	// make sure there's a root path
+	if (!/^\//.test(cmsPath)) {
+		cmsPath = '/' + cmsPath;
+	}
+
+	var paths = cmsPath.split('/').map(function (seg) {
+		return seg.toLowerCase();
+	});
+
+	function fetchMap(cmsId, cmsName) {
+		return fetch(cmsId, cmsName).then(function (list) {
+			return _.chain(list).indexBy(function (node) {
+				return node.name.toLowerCase();
+			}).mapValues(function (val) {
+				return val.id;
+			}).value();
+		});
+	}
+
+	return pipeline(paths.map(function (segment, index) {
+		return function task(map) {
+			var cmsId = index === 0 ? -1 : map[segment];
+			var cmsKey = index === 0 ? 'Content' : segment;
+			if (cmsId) {
+				/* already at the end of path */
+				if (index === paths.length - 1) {
+					return [_.compact(paths).join('_'), cmsId];
+				} else {
+					return fetchMap(cmsId, cmsKey);
+				}
+			} else {
+				when.reject(new Error('No CMS node at path: ' + paths.join('/')));
+			}
+		};
+	}));
+}
+
+function repo_config(dir, val) {
+	var file = path.join(dir, '.umbra');
+	if (val) {
+		mkdir('-p', dir);
+		return json.writeFileSync(file, val);
+	} else {
+		return test('-e', file) ? json.readFileSync(file) : null;
+	}
+}
+// read the repository info at the current path
+function repo_pwd() {
+	var repo = repo_config('.');
+	if (!repo) {
+		console.log("fatal: Not an umbraco repository. Try 'umbra clone' first.");
+		exit(1);
+	}
+	return repo;
+}
+
+function commandClone(cms_path, dir) {
+	var repo = repo_config(dir);
+	if (repo) {
+		console.error("Fatal: repository already exists on destination path '%s'.",
+		repo.dir);
+		return;
+	}
+
+	var me = this;
+	console.log("Cloning '%s' into '%s'", cms_path, dir);
+	auth().then(function () {
+		locate(cms_path).spread(function (cmsKey, cmsId) {
+			repo_config(dir, {
+				key : cmsKey, id : cmsId, dir : dir,
+			})
+			cd(dir);
+			return commandPull().then(function () {
+				console.log('Clone is done.'.ok);
+			});
 		});
 	});
 }
 
-var cli = require('commander').version(pkg.version);
-cli.description(pkg.description)
-.option('-i, --auth', 'whether to invalidate authentication store and prompt for username and password');
+function commandPull() {
+	var repo = repo_pwd();
+	var existing = {};
+	console.log("Pulling CMS node from: '%s'(%s)...", repo.key, repo.id);
+	return when.promise(function (resolve) {
+		// go through the list of local git CMS files for publishing.
+		walk('.', {followLinks : false}).on('file', function (dir, file, next) {
+			var key = path.basename(file.name, path.extname(file.name));
+			existing[key.toLowerCase()] = 1;
+			next();
+		}).on('end', function () {
+			auth().then(function () {
+				fetch(repo.id, repo.key, true).then(function (nodes) {
+					nodes = _.chain(nodes).map(function (node, key) {
+						if (!(key.toLowerCase() in existing)) {
+							// create new file
+							return getContent(node.id).then(function (node) {
+								var file = key;
+								if (node.type) { file += ('.' + node.type) }
+								console.log('creating file %s', file);
+								fs.writeFileSync(file, node.val);
+							})
+						}
+					}).compact().value();
+					if (nodes.length) {
+						return when.map(nodes);
+					}
+				}).tap(function () {
+					console.log('All files are up-to-date.'.ok);
+				}).then(resolve);
+			});
+		});
+	});
+}
+function commandPush(files) {
+	var repo = repo_pwd();
+	files = files.length ? _.indexBy(files,
+	function (file) { return file.toLowerCase(); }) : null;
 
-cli.command('push [files...]').description('publish specific file(s) or the entire "cms" directory to Umbraco').action(function (files) {
-	files = files.length ? _.indexBy(files, function (file) { return file.toLowerCase(); }) : null;
+	console.log("Pushing CMS nodes to: '%s'(%s)...", repo.key, repo.id);
 
 	auth().then(function () {
-		batch_map(29641, 'Camp').then(function (map) {
+		fetch(repo.id, repo.key, true).then(function (map) {
 			// go through the list of local git CMS files for publishing.
-			walk("./cms", {followLinks : false}).on('file',
-			function (dir, file, next) {
-				var p = path.join(dir, file.name).toLowerCase();
-
+			walk('.', {followLinks : false}).on('file', function (dir, file, next) {
+				var p = file.name.toLowerCase();
 				// skip files that are not in the list
 				if (files && !(p in files)) {
 					return next();
 				}
 
-				var key = path.basename(file.name, path.extname(file.name)).toLowerCase();
-				var val = fs.readFileSync(path.join(dir, file.name), 'utf8');
+				var key = path.basename(file.name,
+				path.extname(file.name)).toLowerCase();
+				var val = fs.readFileSync(file.name, 'utf8');
 				var node;
 				if (node = map[key]) {
 					node.val = val;
-					updateContent(node).spread(function () {
+					updateContent(node).then(function () {
 						console.log('[ok] '.ok + '%s (%s) has been published as "%s"',
 						node.key, node.id, _.trunc(node.val, 40));
 					}).catch(function () {
@@ -249,36 +373,15 @@ cli.command('push [files...]').description('publish specific file(s) or the enti
 			});
 		});
 	});
-});
+}
 
-cli.command('pull').description('fetch newly created Umbraco contents back to the "cms" directory').action(function () {
-	var existing = {};
-	// go through the list of local git CMS files for publishing.
-	walk("./cms", {followLinks : false}).on('file', function (dir, file, next) {
-		var key = path.basename(file.name, path.extname(file.name));
-		existing[key.toLowerCase()] = 1;
-		next();
-	}).on('end', function () {
-		auth().then(function () {
-			batch_map(29641, 'Camp').then(function (nodes) {
-				nodes = _.chain(nodes).map(function (node, key) {
-					if (!(key.toLowerCase() in existing)) {
-						// create new file
-						return getContent(node.id).then(function (node) {
-							var file = path.join('cms', key);
-							if(node.type) { file += ('.' + node.type) }
-							console.log('creating file %s', file);
-							fs.writeFileSync(file, node.val);
-						})
-					}
-				}).compact().value();
-				return when.map(nodes).then(function () {
-					console.log('all files are up-to-date.');
-				});
-			});
-		});
-	});
-});
+var cli = require('commander').version(pkg.version);
+cli.description(pkg.description).option('-i, --auth',
+'whether to invalidate authentication store and prompt for username and password');
+
+cli.command('clone <path> <dir>').description('track remote content tree nodes as local file from a specified path in Umbraco').action(commandClone);
+cli.command('pull').description('fetch newly created Umbraco nodes as local files').action(commandPull);
+cli.command('push [files...]').description('publish one or more local files changes to the corresponding CMS node in Umbraco').action(commandPush);
 
 cli.parse(process.argv);
 

@@ -1,7 +1,7 @@
 {
   "name": "umbra",
   "version": "0.2.0",
-  "description": "CLI for publish Umbraco CMS contents from local files",
+  "description": "A CLI for managing Umbraco (umbraco.englishtown.com) contents from local files",
   "main": "index.js",
   "bin": "index.js",
   "scripts": {
@@ -13,6 +13,7 @@
     "cheerio": "^0.18.0",
     "colors": "^1.0.3",
     "commander": "^2.6.0",
+    "jsonfile": "^2.0.0",
     "lodash": "^3.2.0",
     "moment": "^2.9.0",
     "nconf": "^0.7.1",
