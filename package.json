@@ -3,11 +3,13 @@
   "version": "0.3.0",
   "description": "A CLI for managing Umbraco (umbraco.englishtown.com) contents from local files",
   "main": "index.js",
-  "bin": "index.js",
+  "bin": {
+    "umbra": "index.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "",
+  "author": "yaojun85@gmail.com",
   "license": "ISC",
   "dependencies": {
     "cheerio": "^0.18.0",
@@ -25,5 +27,19 @@
     "walk": "^2.3.9",
     "when": "^3.7.2",
     "xml2js": "^0.4.5"
-  }
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/garryyao/umbra.git"
+  },
+  "keywords": [
+    "umbraco",
+    "cli",
+    "cms"
+  ],
+  "bugs": {
+    "url": "https://github.com/garryyao/umbra/issues"
+  },
+  "homepage": "https://github.com/garryyao/umbra"
 }
