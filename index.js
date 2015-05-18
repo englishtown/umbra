@@ -7,7 +7,12 @@ var fs = require('fs');
 var path = require('path');
 var node = require('when/node');
 var walk = require('walk').walk;
+var prompt = require('prompt');
 var pkg = require('./package.json');
+var HOME_PATH = (function () {
+	return process.env[(process.platform == 'win32') ? 'USERPROFILE' : 'HOME'];
+})();
+var nconf = require('nconf').argv().file({file : path.join(HOME_PATH, 'umbra.auth.json')});
 require('colors').setTheme({
 	prompt : 'grey', ok : 'green', warn : 'yellow', fail : 'red'
 });
@@ -47,17 +52,55 @@ function formPost(url, params) {
 	});
 }
 
-function auth() {
-	return formPost(LOGIN_URL, {
-		form : {
-			'ctl00$body$lname' : 'garry.yao',
-			'ctl00$body$passw' : 'gy123',
-			ctl00$body$Button1 : 'Login'
+/* simple authentication storage */
+function saveAuth(username, password) {
+	nconf.save();
+}
+function getAuth(usePrompt) {
+	return when.promise(function (resolve) {
+		// use prompt for authentication
+		if (usePrompt || cli.auth || !nconf.get('auth')) {
+			prompt.get([
+				{
+					name : 'username', required : true
+				}, {
+					name : 'password', hidden : true, conform : function (value) {
+						return true;
+					}
+				}
+			], function (err, result) {
+				nconf.set('auth:username', result.username);
+				nconf.set('auth:password', result.password);
+				resolve();
+			});
+		} else {
+			resolve();
 		}
-	}).spread(function (res) {
-		if (res.statusCode !== 302) {
-			throw new Error('authenticate failed');
-		}
+	}).then(function () {
+		return [nconf.get('auth:username'), nconf.get('auth:password')];
+	});
+}
+
+function auth(usePrompt) {
+	return getAuth(usePrompt).spread(function (username, password) {
+		return formPost(LOGIN_URL, {
+			form : {
+				'ctl00$body$lname' : username,
+				'ctl00$body$passw' : password,
+				ctl00$body$Button1 : 'Login'
+			}
+		}).spread(function (res) {
+			// authentication failed
+			if (res.statusCode !== 302) {
+				console.error('authentication failed, try again.'.fail);
+				return auth(true);
+			} else {
+				/* persist on auth success */
+				saveAuth({
+					username : username, password : password
+				});
+			}
+		});
 	});
 }
 
@@ -171,7 +214,8 @@ function batch_map(batch_id, batch_name) {
 }
 
 var cli = require('commander').version(pkg.version);
-cli.description(pkg.description);
+cli.description(pkg.description)
+.option('-i, --auth', 'whether to invalidate authentication store and prompt for username and password');
 
 cli.command('push [files...]').description('publish specific file(s) or the entire "cms" directory to Umbraco').action(function (files) {
 	files = files.length ? _.indexBy(files, function (file) { return file.toLowerCase(); }) : null;
