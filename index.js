@@ -14,6 +14,7 @@ var pkg = require('./package.json');
 var HOME_PATH = (function () {
 	return process.env[(process.platform == 'win32') ? 'USERPROFILE' : 'HOME'];
 })();
+var UNDEFINED;
 var nconf = require('nconf').argv().file({
 	file : path.join(HOME_PATH, 'umbra.auth.json')
 });
@@ -42,7 +43,17 @@ function extendForm(form, $) {
 	});
 	return _.extend(form, params);
 }
-
+function tryThese() {
+	var retval;
+	for (var i = 0, length = arguments.length; i < length; i++) {
+		var lambda = arguments[i];
+		try {
+			retval = lambda();
+			break;
+		} catch (e) { }
+	}
+	return retval;
+};
 function formPost(url, params) {
 	return request.get(url,
 	{qs : params.qs}).spread(function (response, get_body) {
@@ -107,6 +118,14 @@ function auth(usePrompt) {
 	});
 }
 
+var SUPPORTED_TEMPLATES = {
+	'plaintext':1,
+	'plainhtml':1,
+	'plaincontent':1
+};
+
+var contentTabRegex = /Content/;
+
 function updateContent(node) {
 	return formPost(CMS_URL, {
 		qs : {
@@ -117,41 +136,61 @@ function updateContent(node) {
 				'ctl00$body$TabView1_tab01layer_publish.y' : 2,
 				'ctl00$body$NameTxt' : node.name
 			};
-			var contentTabIndex = $('.header li > a > span > nobr:contains("Content")').closest('li').index() +
-			1;
-			var content_name = $('.tabpage:nth-child(' + contentTabIndex +
-			') .tabpageContent textarea').eq(0).attr('name');
+
+			var tabIndex = $('.header li > a > span > nobr').filter(function () {
+				// Tab name matches exactly "content"
+				return contentTabRegex.test($(this).text());
+			}).closest('li').index() + 1;
+
+			var content_name = $('.tabpage:nth-child(' + tabIndex + ') .tabpageContent textarea').eq(0).attr('name');
 			retval[content_name] = node.val;
 			return retval;
 		}
 	});
 }
-function getContent(id) {
+
+function getContent(id, key) {
 	// guess extension by content: "json", "html" or "text"
 	function guess_extension(str) {
-		try {
+		return tryThese(function () {
 			JSON.parse(str);
 			return 'json';
-		} catch (er) {
-			var $ = cheerio(str);
-			if ($('*').length) {
+		}, function () {
+			if (cheerio(str)('*').length) {
 				return 'html';
 			}
-		}
-		return 'txt';
+		}, function () {
+			return 'txt';
+		})
 	}
 
 	return request.get(CMS_URL, {
 		qs : {id : id}
 	}).spread(function (response, body) {
 		var $ = cheerio(body);
-		var content = $('[name="ctl00$body$ctl08"]').val() ||
-		$('[name="ctl00$body$ctl04"]').val();
+		var template;
+		// check if the CMS node has a content tab
+		var tabIndex = $('.header li > a > span > nobr').filter(function () {
+			// Tab name matches exactly "content"
+			return contentTabRegex.test($(this).text());
+		}).closest('li').index() + 1;
+
+		// CMS node content
+		var content = $('.tabpage:nth-child(' + tabIndex +
+		') .tabpageContent textarea').val();
+
+		// no content node found
+		if (content === UNDEFINED) {
+			// which template does this CMS node use?
+			template = $('[class="propertyItemheader"]:contains("Document Type") ~ [class="propertyItemContent"]').text().trim();
+			console.log('Ignore unsupported template:' + template + ' of ' + key);
+			throw new Error('Unsupported Template');
+		}
 		return {
-			id : id,
-			key : $('[name="ctl00$body$NameTxt"]').val(),
-			type : guess_extension(content),
-			val : content
+			id: id,
+			key: $('[name="ctl00$body$NameTxt"]').val(),
+			type: guess_extension(content),
+			val: content
 		};
 	});
 }
@@ -320,20 +359,25 @@ function commandPull() {
 					nodes = _.chain(nodes).map(function (node, key) {
 						if (!(key.toLowerCase() in existing)) {
 							// create new file
-							return getContent(node.id).then(function (node) {
+							return getContent(node.id, key).then(function (node) {
 								var file = key;
 								if (node.type) { file += ('.' + node.type) }
 								console.log('creating file %s', file);
 								fs.writeFileSync(file, node.val);
-							})
+							});
 						}
 					}).compact().value();
 					if (nodes.length) {
-						return when.map(nodes);
+						return when.settle(nodes);
 					}
-				}).tap(function () {
-					console.log('All files are up-to-date.'.ok);
-				}).then(resolve);
+				}).then(function (descriptors) {
+					var stat = _.groupBy(descriptors, function (desc) {
+						return desc.state;
+					});
+					var added = stat.fulfilled && stat.fulfilled.length || 0;
+					var ignored = stat.rejected && stat.rejected.length || 0;
+					console.log((added + ' files added, ' + ignored + ' files ignored.').ok);
+				});
 			});
 		});
 	});
