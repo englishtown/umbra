@@ -1,6 +1,6 @@
 {
   "name": "umbra",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A CLI for managing Umbraco (umbraco.englishtown.com) contents from local files",
   "main": "index.js",
   "bin": {
